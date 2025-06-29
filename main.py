@@ -87,7 +87,7 @@ async def check_domain(domain: str):
             "spf": get_spf(domain),
             "dkim": get_dkim(domain),
             "dmarc": get_dmarc(domain),
-            "ssl": get_ssl(domain)
+            "ssl": "skipped"
         }
     except Exception as e:
         return {
