@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-import httpx
 import re
+import httpx
 
 app = FastAPI()
 
@@ -15,10 +15,11 @@ app.add_middleware(
 
 async def resolve_txt(domain: str):
     try:
-        url = f"https://dns.google/resolve?name={domain}&type=TXT"
-        response = httpx.get(url, timeout=5)
-        data = response.json()
-        return [a["data"].strip('"') for a in data.get("Answer", [])]
+        async with httpx.AsyncClient(timeout=5) as client:
+            url = f"https://dns.google/resolve?name={domain}&type=TXT"
+            resp = await client.get(url)
+            data = resp.json()
+            return [r["data"].strip('"') for r in data.get("Answer", []) if "data" in r]
     except Exception as e:
         return []
 
@@ -39,8 +40,7 @@ async def get_spf(domain: str):
     return {"found": False}
 
 async def get_dmarc(domain: str):
-    dmarc_domain = f"_dmarc.{domain}"
-    records = await resolve_txt(dmarc_domain)
+    records = await resolve_txt(f"_dmarc.{domain}")
     for txt in records:
         if txt.startswith("v=DMARC1"):
             return {
@@ -52,8 +52,7 @@ async def get_dmarc(domain: str):
     return {"found": False}
 
 async def get_dkim(domain: str, selector="default"):
-    dkim_domain = f"{selector}._domainkey.{domain}"
-    records = await resolve_txt(dkim_domain)
+    records = await resolve_txt(f"{selector}._domainkey.{domain}")
     for txt in records:
         if txt.startswith("v=DKIM1"):
             return {
@@ -63,8 +62,12 @@ async def get_dkim(domain: str, selector="default"):
             }
     return {"found": False}
 
+@app.get("/")
+async def root():
+    return {"status": "ok", "message": "Use /check?domain=..."}
+
 @app.get("/check")
-async def check_domain(domain: str):
+async def check(domain: str):
     try:
         spf = await get_spf(domain)
         dmarc = await get_dmarc(domain)
@@ -76,4 +79,4 @@ async def check_domain(domain: str):
             "dkim": dkim
         }
     except Exception as e:
-        return {"status": "error", "message": str(e)}
+        return {"error": str(e)}
