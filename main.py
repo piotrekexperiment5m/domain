@@ -81,10 +81,16 @@ def get_ssl(domain):
 
 @app.get("/check")
 async def check_domain(domain: str):
-    return {
-        "domain": domain,
-        "spf": get_spf(domain),
-        "dkim": get_dkim(domain),
-        "dmarc": get_dmarc(domain),
-        "ssl": get_ssl(domain)
-    }
+    try:
+        return {
+            "domain": domain,
+            "spf": get_spf(domain),
+            "dkim": get_dkim(domain),
+            "dmarc": get_dmarc(domain),
+            "ssl": get_ssl(domain)
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": str(e)
+        }
