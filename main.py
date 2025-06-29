@@ -1,10 +1,10 @@
-from fastapi import FastAPI, Request
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-import dns.resolver
-import ssl, socket
+import httpx
 import re
 
 app = FastAPI()
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -13,16 +13,17 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-def get_txt_record(domain, prefix=""):
+async def resolve_txt(domain: str):
     try:
-        name = f"{prefix}.{domain}" if prefix else domain
-        result = dns.resolver.resolve(name, "TXT")
-        return ["".join(r.strings[0].decode() if isinstance(r.strings[0], bytes) else r.strings[0] for r in result)]
-    except:
+        url = f"https://dns.google/resolve?name={domain}&type=TXT"
+        response = httpx.get(url, timeout=5)
+        data = response.json()
+        return [a["data"].strip('"') for a in data.get("Answer", [])]
+    except Exception as e:
         return []
 
-def get_spf(domain):
-    records = get_txt_record(domain)
+async def get_spf(domain: str):
+    records = await resolve_txt(domain)
     for txt in records:
         if txt.startswith("v=spf1"):
             return {
@@ -37,8 +38,9 @@ def get_spf(domain):
             }
     return {"found": False}
 
-def get_dmarc(domain):
-    records = get_txt_record(domain, "_dmarc")
+async def get_dmarc(domain: str):
+    dmarc_domain = f"_dmarc.{domain}"
+    records = await resolve_txt(dmarc_domain)
     for txt in records:
         if txt.startswith("v=DMARC1"):
             return {
@@ -49,45 +51,29 @@ def get_dmarc(domain):
             }
     return {"found": False}
 
-def get_dkim(domain, selectors=["default", "mail", "google", "k1"]):
-    results = {}
-    for sel in selectors:
-        records = get_txt_record(domain, f"{sel}._domainkey")
-        if records:
-            txt = records[0]
-            results[sel] = {
+async def get_dkim(domain: str, selector="default"):
+    dkim_domain = f"{selector}._domainkey.{domain}"
+    records = await resolve_txt(dkim_domain)
+    for txt in records:
+        if txt.startswith("v=DKIM1"):
+            return {
                 "found": True,
                 "raw": txt,
                 "key_prefix": (re.findall(r"p=([^;]+)", txt)[0][:30] + "...") if "p=" in txt else None
             }
-        else:
-            results[sel] = {"found": False}
-    return {"records": results, "selectors_checked": selectors}
+    return {"found": False}
 
-def get_ssl(domain):
-    try:
-        context = ssl.create_default_context()
-        with socket.create_connection((domain, 443), timeout=5) as sock:
-            with context.wrap_socket(sock, server_hostname=domain) as ssock:
-                cert = ssock.getpeercert()
-                return {
-                    "valid_from": cert.get("notBefore"),
-                    "valid_to": cert.get("notAfter"),
-                    "subject": cert.get("subject"),
-                    "issuer": cert.get("issuer")
-                }
-    except Exception as e:
-        return {"error": str(e)}
-
-        @app.get("/check")
+@app.get("/check")
 async def check_domain(domain: str):
     try:
+        spf = await get_spf(domain)
+        dmarc = await get_dmarc(domain)
+        dkim = await get_dkim(domain)
         return {
             "domain": domain,
-            "spf": get_spf(domain)
+            "spf": spf,
+            "dmarc": dmarc,
+            "dkim": dkim
         }
     except Exception as e:
-        return {
-            "status": "error",
-            "message": str(e)
-        }
+        return {"status": "error", "message": str(e)}
